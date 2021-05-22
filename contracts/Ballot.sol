@@ -1,4 +1,7 @@
-pragma solidity >=0.7.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+
+
+pragma solidity ^0.8.3;
 
 /** 
  * @title Ballot
@@ -6,49 +9,47 @@ pragma solidity >=0.7.0 <0.9.0;
  */
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "./Proposal.sol";
+import "./VoteCoin.sol";
+
 
 contract Ballot is Ownable {
    
     struct Voter {
-        uint weight; // weight is accumulated by delegation
-        bool voted;  // if true, that person already voted
         address delegate; // person delegated to
         uint vote;   // index of the voted proposal
+        bool voted;
     }
 
-    struct Proposal {
-        // If you can limit the length to a certain number of bytes, 
-        // always use one of bytes1 to bytes32 because they are much cheaper
-        bytes32 name;   // short name (up to 32 bytes)
-        uint voteCount; // number of accumulated votes
-    }
+    VoteCoin public voteCoin;
 
     address public chairperson;
 
     mapping(address => Voter) public voters;
 
-    Proposal[] public proposals;
+    //mapping(address => Proposal) proposalStructs;
+
+
+    address[] public proposals;
 
     /** 
      * @dev Create a new ballot to choose one of 'proposalNames'.
      * @param proposalNames names of proposals
      */
-    constructor(bytes32[] memory proposalNames) {
+    constructor(string memory name, string memory symbol, bytes32[] memory proposalNames) {
         chairperson = msg.sender;
-
+        voteCoin = new VoteCoin(name, symbol);
         for (uint i = 0; i < proposalNames.length; i++) {
-            // 'Proposal({...})' creates a temporary
-            // Proposal object and 'proposals.push(...)'
-            // appends it to the end of 'proposals'.
-            proposals.push(Proposal({
-                name: proposalNames[i],
-                voteCount: 0
-            }));
+            proposals.push(address(new Proposal(proposalNames[i])));
         }
     }
     
+    function getVoterBalance(address voter) public view virtual returns (uint256){
+        return voteCoin.balanceOf(voter);
+    }
+
     /** 
-     * @dev Give 'voter' the right to vote on this ballot. May only be called by 'chairperson'.
+     * @dev Give 'voter' the right to vote on this ballot AKA receives 1 votecoin. May only be called by 'chairperson'.
      * @param voter address of voter
      */
     function giveRightToVote(address voter) public onlyOwner {
@@ -60,8 +61,8 @@ contract Ballot is Ownable {
             !voters[voter].voted,
             "The voter already voted."
         );
-        require(voters[voter].weight == 0);
-        voters[voter].weight = 1;
+        require (voteCoin.balanceOf(voter) == 0);
+        voteCoin.mint(voter, 1);
     }
 
     /**
@@ -83,13 +84,9 @@ contract Ballot is Ownable {
         sender.delegate = to;
         Voter storage delegate_ = voters[to];
         if (delegate_.voted) {
-            // If the delegate already voted,
-            // directly add to the number of votes
-            proposals[delegate_.vote].voteCount += sender.weight;
+            voteCoin.transfer(proposals[delegate_.vote], voteCoin.balanceOf(msg.sender));
         } else {
-            // If the delegate did not vote yet,
-            // add to her weight.
-            delegate_.weight += sender.weight;
+            voteCoin.transfer(to, voteCoin.balanceOf(msg.sender));
         }
     }
 
@@ -99,15 +96,11 @@ contract Ballot is Ownable {
      */
     function vote(uint proposal) public {
         Voter storage sender = voters[msg.sender];
-        require(sender.weight != 0, "Has no right to vote");
+        require(voteCoin.balanceOf(msg.sender) != 0, "Has no tokens to vote");
         require(!sender.voted, "Already voted.");
         sender.voted = true;
         sender.vote = proposal;
-
-        // If 'proposal' is out of the range of the array,
-        // this will throw automatically and revert all
-        // changes.
-        proposals[proposal].voteCount += sender.weight;
+        voteCoin.transfer(proposals[proposal], voteCoin.balanceOf(msg.sender));
     }
 
     /** 
@@ -115,13 +108,13 @@ contract Ballot is Ownable {
      * @return winningProposal_ index of winning proposal in the proposals array
      */
     function winningProposal() public view
-            returns (uint winningProposal_)
+            returns (address winningProposal_)
     {
         uint winningVoteCount = 0;
         for (uint p = 0; p < proposals.length; p++) {
-            if (proposals[p].voteCount > winningVoteCount) {
-                winningVoteCount = proposals[p].voteCount;
-                winningProposal_ = p;
+            if (voteCoin.balanceOf(proposals[p]) > winningVoteCount) {
+                winningVoteCount = voteCoin.balanceOf(proposals[p]);
+                winningProposal_ = proposals[p];
             }
         }
     }
@@ -133,6 +126,6 @@ contract Ballot is Ownable {
     function winnerName() public view
             returns (bytes32 winnerName_)
     {
-        winnerName_ = proposals[winningProposal()].name;
+        winnerName_ = Proposal(winningProposal()).name();
     }
 }
